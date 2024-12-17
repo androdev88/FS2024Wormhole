@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instance and Location Dashboard</title>
+    <link href="/lib/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/lib/bootstrap-icons.css">
+    <script src="/lib/react.min.js" crossorigin></script>
+    <script src="/lib/react-dom.min.js" crossorigin></script>
+    <script src="/lib/babel.min.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script type="text/babel" charset="UTF-8">
+    class App extends React.Component {
+        state = {
+            instances: [],
+            locations: []
+        };
+
+        componentDidMount() {
+            this.fetchInstanceData();
+            this.fetchLocations();
+            this.instanceInterval = setInterval(this.fetchInstanceData, 100);
+        }
+
+        componentWillUnmount() {
+            clearInterval(this.instanceInterval);
+        }
+
+        fetchInstanceData = async () => {
+            try {
+                const response = await fetch('/api/info');
+                const instances = await response.json();
+                
+                this.setState({
+                    instances: instances.sort((a, b) => a.id - b.id)
+                });
+            } catch (error) {
+                console.error("Error fetching instances:", error);
+            }
+        }
+
+        fetchLocations = async () => {
+            try {
+                const response = await fetch('/api/locations');
+                const locations = await response.json();
+                
+                this.setState({
+                    locations: locations.sort((a, b) => a.name.localeCompare(b.name))
+                });
+            } catch (error) {
+                console.error("Error fetching locations:", error);
+            }
+        }
+
+        addLocation = async (name, lon, lat, alt) => {
+            const { newLocation } = this.state;
+            try {
+                await fetch('/api/locations', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name, latitude: lat, longitude: lon, altitude: alt })
+                });
+                this.fetchLocations();
+            } catch (error) {
+                console.error("Error adding location:", error);
+            }
+        }
+
+        teleport = async (location, altitudeOffset = 0) => {
+            try {
+                await fetch('/api/setCords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        latitude: location.latitude,
+                        longitude: location.longitude,
+                        altitude: location.altitude + altitudeOffset
+                    })
+                });
+            } catch (error) {
+                console.error("Error teleporting:", error);
+            }
+        }
+
+        deleteLocation = async (name) => {
+            try {
+                await fetch('/api/locations', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                this.fetchLocations();
+            } catch (error) {
+                console.error("Error deleting location:", error);
+            }
+        }
+
+        render() {
+            const { instances, locations, newLocation } = this.state;
+            return (
+                <div className="container">
+                    <div className="row">
+                            <h3>Instances</h3>
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th>Instance ID</th>
+                                        <th>Coordinates</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                {instances.map(instance => (
+                                    <tr key={instance.id}>
+                                        <td>{instance.id}</td>
+                                        <td>
+                                            Longitude: {instance.longitude}<br/>
+                                            Latitude: {instance.latitude}<br/>
+                                            Altitude: {instance.altitude}
+                                        </td>
+                                        <td>           
+                                            <input 
+                                                type="text" 
+                                                name="name"
+                                                className="form-control mb-2"
+                                                placeholder="Enter location name"
+                                            />                     
+                                            <button
+                                                className="btn btn-success"
+                                                onClick={(e) => {
+                                                    const input = e.target.previousElementSibling;
+                                                    const name = input.value;
+                                                    this.addLocation(name, instance.longitude, instance.latitude, instance.altitude);
+                                                }}>
+                                                Add
+                                            </button>
+                                            <button 
+                                                    className="btn btn-sm btn-primary" 
+                                                    onClick={() => this.teleport({longitude:instance.longitude, latitude:instance.latitude, altitude:instance.altitude+500})}>
+                                                    +500
+                                                </button>
+                                            <button 
+                                                    className="btn btn-sm btn-primary" 
+                                                    onClick={() => this.teleport({longitude:instance.longitude, latitude:instance.latitude, altitude:instance.altitude-500})}>
+                                                    -500
+                                                </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table>
+                        
+                    <div className="row">
+                            <h3>Locations</h3>
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Coordinates</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                {locations.map(location => (
+                                    <tr key={location.name}>
+                                        <td>{location.name}</td>
+                                        <td>
+                                            {location.longitude.toFixed(2)} x {location.latitude.toFixed(2)} @ {location.altitude.toFixed(0)}
+                                        </td>
+                                        <td>
+                                            <div className="btn-group">
+                                                <button 
+                                                    className="btn btn-sm btn-primary me-1" 
+                                                    onClick={() => this.teleport(location)}>
+                                                    Teleport
+                                                </button>
+                                                <button 
+                                                    className="btn btn-sm btn-info me-1" 
+                                                    onClick={() => this.teleport(location, 500)}>
+                                                    Teleport + 500ft
+                                                </button>
+                                                <button 
+                                                    className="btn btn-sm btn-warning me-1" 
+                                                    onClick={() => this.teleport(location, 2000)}>
+                                                    Teleport + 2000ft
+                                                </button>
+                                                <button 
+                                                    className="btn btn-sm btn-danger" 
+                                                    onClick={() => this.deleteLocation(location.name)}>
+                                                    Delete
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+    }
+
+    ReactDOM.render(<App/>, document.getElementById('app'));
+</script>
+</body>
+</html>
