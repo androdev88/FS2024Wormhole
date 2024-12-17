@@ -2,7 +2,7 @@
 * Simple util to make the game playable.
 * Works in Career mode
 * Version 1.2.7.0 supported
-* webserver at http://localhost:8089
+* webserver at http://localhost:8089 - open firewall to access from other devices
 
 # Speed run - CR farming
 1. Find well paid mission take a note of destination ICAO
