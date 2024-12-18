@@ -3,6 +3,7 @@
 * Works in Career mode
 * Version 1.2.7.0 supported
 * webserver at http://localhost:8089 - open firewall to access from other devices
+* works with MS Store version, (I'll add tutorial to find pointers in any version)
 
 # Speed run - CR farming
 1. Find well paid mission take a note of destination ICAO
