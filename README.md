@@ -4,6 +4,7 @@
 * Version 1.2.7.0 supported
 * webserver at http://localhost:8089 - open firewall to access from other devices
 * works with MS Store version
+* app create Tray icon showing number of game instances, clicking the icon will close the app
   
 # Speed run - CR farming
 1. Find well paid mission take a note of destination ICAO
