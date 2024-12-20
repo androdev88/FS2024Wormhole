@@ -11,6 +11,7 @@
 #include <cpprest/http_listener.h>
 #include <cpprest/filestream.h>
 #include <cpprest/json.h>
+#include <filesystem>
 
 #pragma comment(lib, "Version.lib")
 
@@ -31,10 +32,12 @@ struct Sprocess {
     uintptr_t baseAddress;
     std::wstring version;
     std::vector<uintptr_t> offsets;
+    long size = 0;
 
     double altitude = 0;
     double longitude = 0;
     double latitude = 0;
+    double heading = 0;
 };
 
 std::vector<Sprocess*> processes;
@@ -44,48 +47,88 @@ struct Location {
     double latitude;
     double longitude;
     double altitude;
+    double heading;
 };
 
 std::vector<Location> locations;
 const std::wstring locationsFilePath = L"locations.csv";
 std::wstring iniFilePath;
 
+std::string parseQuotedField(std::stringstream& ss) {
+    std::string result;
+    char c;
+    bool inQuotes = false;
+
+    while (ss.get(c)) {
+        if (c == '"') {
+            inQuotes = !inQuotes;
+        }
+        else if (c == ',' && !inQuotes) {
+            break;
+        }
+        else {
+            result += c;
+        }
+    }
+
+    return result;
+}
+
 void LoadLocations() {
     std::ifstream file(locationsFilePath);
-    if (!file.is_open()) return;
+    if (!file.is_open()) {
+        std::cerr << "Error: Unable to open file." << std::endl;
+        return;
+    }
 
     locations.clear();
     std::string line;
-    std::getline(file, line); // Skip header
+
+    // Skip header line
+    if (!std::getline(file, line)) {
+        file.close();
+        return;
+    }
 
     while (std::getline(file, line)) {
         std::stringstream ss(line);
         Location loc;
+
+        // Parse fields, respecting quoted strings
+        loc.name = parseQuotedField(ss);
+
         std::string field;
 
-        std::getline(ss, loc.name, ',');
-        std::getline(ss, field, ',');
+        field = parseQuotedField(ss);
         loc.latitude = std::stod(field);
-        std::getline(ss, field, ',');
+
+        field = parseQuotedField(ss);
         loc.longitude = std::stod(field);
-        std::getline(ss, field, ',');
+
+        field = parseQuotedField(ss);
         loc.altitude = std::stod(field);
+
+        field = parseQuotedField(ss);
+        loc.heading = std::stod(field);
 
         locations.push_back(loc);
     }
+
     file.close();
 }
+
 
 void SaveLocations() {
     std::ofstream file(locationsFilePath);
     if (!file.is_open()) return;
-
-    file << "Name,Latitude,Longitude,Altitude\n";
+    file << std::fixed << std::setprecision(8);
+    file << "Name,Latitude,Longitude,Altitude,Heading\n";
     for (const auto& loc : locations) {
-        file << loc.name << ","
+        file  << "\"" << loc.name << "\","
             << loc.latitude << ","
             << loc.longitude << ","
-            << loc.altitude << "\n";
+            << loc.altitude << ","
+            << loc.heading << "\n";
     }
     file.close();
 }
@@ -177,14 +220,15 @@ void getProcessInfo(Sprocess* data) {
     wchar_t windowTitle[256];
     int length = GetWindowTextW(data->hwnd, windowTitle, sizeof(windowTitle) / sizeof(wchar_t));
     data->version = extractAfterLastDash(windowTitle);
-
 }
 
 std::vector<uintptr_t> ReadPointersFromConfig(Sprocess* data) {
     WCHAR buffer[4096] = { 0 };
     std::vector<uintptr_t> pointers;
 
-    DWORD charsRead = GetPrivateProfileString(L"Pointers", data->version.c_str(), L"", buffer, sizeof(buffer), iniFilePath.c_str());
+    std::wstring sizeStr = std::to_wstring(data->size);
+    std::wstring combinedKey = data->version + L"-" + sizeStr;
+    DWORD charsRead = GetPrivateProfileString(L"Pointers", combinedKey.c_str(), L"", buffer, sizeof(buffer), iniFilePath.c_str());
     if (charsRead == 0) MessageBoxA(NULL, "Game version not supported", "Error", MB_OK);
 
     std::wstring rawString(buffer);
@@ -212,14 +256,17 @@ uintptr_t getCoordinatesPointer(Sprocess* data) {
     return pointerAddress;
 }
 
-void SetCords(Sprocess* data, double latitude, double longitude, double altitude) {
+void SetCords(Sprocess* data, double latitude, double longitude, double altitude, double heading) {
     latitude = degreesToRadians(latitude);
     longitude = degreesToRadians(longitude);
+    if (heading >= 180) heading -= 360;
+    heading = degreesToRadians(heading);
 
     uintptr_t pointerAddress = getCoordinatesPointer(data);
     double finalValue;
     if (pointerAddress > 0) {
         double newValue;
+        WriteProcessMemory(data->hProcess, (LPVOID)(pointerAddress - 0x18), &heading, sizeof(heading), nullptr);
         WriteProcessMemory(data->hProcess, (LPVOID)pointerAddress, &latitude, sizeof(latitude), nullptr);
         WriteProcessMemory(data->hProcess, (LPVOID)(pointerAddress + 0x18), &longitude, sizeof(longitude), nullptr);
         WriteProcessMemory(data->hProcess, (LPVOID)(pointerAddress + 0x30), &altitude, sizeof(altitude), nullptr);
@@ -233,6 +280,9 @@ void ProcessWindow(HWND hwnd, int id) {
     data->hwnd = hwnd;
     getProcessInfo(data);
     data->hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION, FALSE, data->processID);
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameExW(data->hProcess, NULL, exePath, MAX_PATH);
+    data->size = std::filesystem::file_size(exePath);
     data->offsets = ReadPointersFromConfig(data);
     processes.push_back(data);
 
@@ -251,6 +301,11 @@ void ProcessWindow(HWND hwnd, int id) {
             }
             if (ReadProcessMemory(data->hProcess, (LPCVOID) (pointerAddress + 0x30), &finalValue, sizeof(finalValue), nullptr)) {
                 data->altitude = finalValue;
+            }
+            if (ReadProcessMemory(data->hProcess, (LPCVOID)(pointerAddress - 0x18), &finalValue, sizeof(finalValue), nullptr)) {
+                finalValue = radiansToDegrees(finalValue);
+                if (finalValue < 0) finalValue += 360;
+                data->heading = finalValue;
             }
         }
         sleep_for(milliseconds(100));
@@ -441,6 +496,7 @@ void handle_request(http_request request)
             j[U("altitude")] = json::value::number((double)process->altitude);
             j[U("longitude")] = json::value::number((double)process->longitude);
             j[U("latitude")] = json::value::number((double)process->latitude);
+            j[U("heading")] = json::value::number((double)process->heading);
             
             arr[arr.size()] = j;
         }
@@ -474,13 +530,16 @@ void handle_request(http_request request)
     }
     if (request.relative_uri().path() == U("/api/locations") && request.method() == methods::GET)
     {
+        int id = 0;
         json::value arr = json::value::array();
         for (const auto& loc : locations) {
             json::value j;
+            j[U("id")] = json::value::number(id++);
             j[U("name")] = json::value::string(utility::conversions::to_string_t(loc.name));
             j[U("latitude")] = json::value::number(loc.latitude);
             j[U("longitude")] = json::value::number(loc.longitude);
             j[U("altitude")] = json::value::number(loc.altitude);
+            j[U("heading")] = json::value::number(loc.heading);
 
             arr[arr.size()] = j;
         }
@@ -496,6 +555,7 @@ void handle_request(http_request request)
             newLoc.latitude = body[U("latitude")].as_double();
             newLoc.longitude = body[U("longitude")].as_double();
             newLoc.altitude = body[U("altitude")].as_double();
+            newLoc.heading = body[U("heading")].as_double();
 
             locations.push_back(newLoc);
             SaveLocations();
@@ -525,10 +585,11 @@ void handle_request(http_request request)
             double latitude = body[U("latitude")].as_double();
             double longitude = body[U("longitude")].as_double();
             double altitude = body[U("altitude")].as_double();
+            double heading = body[U("heading")].as_double();
 
             if (!processes.empty()) {
                 Sprocess* firstProcess = processes[0];
-                SetCords(firstProcess, latitude, longitude, altitude);
+                SetCords(firstProcess, latitude, longitude, altitude, heading);
                 request.reply(status_codes::OK);
             }
             else {
@@ -628,8 +689,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     std::thread worker(MainUpdateLoop, hwnd);
 
-    RegisterHotKey(NULL, 100, MOD_CONTROL | MOD_ALT, VK_F11);
-    RegisterHotKey(NULL, 101, MOD_CONTROL | MOD_ALT, VK_F12);
+    RegisterHotKey(NULL, 100, MOD_CONTROL, VK_ADD);
+    RegisterHotKey(NULL, 101, MOD_CONTROL, VK_SUBTRACT);
+    RegisterHotKey(NULL, 102, MOD_CONTROL | MOD_ALT, VK_ADD);
+    RegisterHotKey(NULL, 103, MOD_CONTROL | MOD_ALT, VK_SUBTRACT);
+
+    RegisterHotKey(NULL, 110, MOD_CONTROL, VK_LEFT);
+    RegisterHotKey(NULL, 111, MOD_CONTROL, VK_RIGHT);
+    RegisterHotKey(NULL, 112, MOD_CONTROL, VK_UP);
+    RegisterHotKey(NULL, 113, MOD_CONTROL, VK_DOWN);
+
+    RegisterHotKey(NULL, 120, MOD_CONTROL | MOD_ALT, VK_LEFT);
+    RegisterHotKey(NULL, 121, MOD_CONTROL | MOD_ALT, VK_RIGHT);
+    RegisterHotKey(NULL, 122, MOD_CONTROL | MOD_ALT, VK_UP);
+    RegisterHotKey(NULL, 123, MOD_CONTROL | MOD_ALT, VK_DOWN);
     while (GetMessage(&Msg, NULL, 0, 0)) {
         TranslateMessage(&Msg);
         DispatchMessage(&Msg);
@@ -639,11 +712,51 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         else if (Msg.message == WM_HOTKEY) {
             if (Msg.wParam == 100) {
                 Sprocess* firstProcess = processes[0];
-                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude-500);
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude+1, firstProcess->heading);
             }
             if (Msg.wParam == 101) {
                 Sprocess* firstProcess = processes[0];
-                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude+500);
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude-1, firstProcess->heading);
+            }
+            if (Msg.wParam == 102) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude + 500, firstProcess->heading);
+            }
+            if (Msg.wParam == 103) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude, firstProcess->altitude - 500, firstProcess->heading);
+            }
+            if (Msg.wParam == 110) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude - 0.00001369, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 111) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude + 0.00001369, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 112) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude + 0.00001369, firstProcess->longitude, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 113) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude - 0.00001369, firstProcess->longitude, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 120) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude - 0.001369, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 121) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude, firstProcess->longitude + 0.001369, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 122) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude + 0.001369, firstProcess->longitude, firstProcess->altitude, firstProcess->heading);
+            }
+            if (Msg.wParam == 123) {
+                Sprocess* firstProcess = processes[0];
+                SetCords(firstProcess, firstProcess->latitude - 0.001369, firstProcess->longitude, firstProcess->altitude, firstProcess->heading);
             }
         }
     }

@@ -6,17 +6,30 @@
     <title>Instance and Location Dashboard</title>
     <link href="/lib/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/lib/bootstrap-icons.css">
+    <link rel="stylesheet" href="/lib/leaflet.css">
     <script src="/lib/react.min.js" crossorigin></script>
     <script src="/lib/react-dom.min.js" crossorigin></script>
     <script src="/lib/babel.min.js"></script>
+    <script src="/lib/leaflet.js"></script>
+    <style>
+        img.huechange {
+            filter: hue-rotate(-110deg);
+        }
+    </style>
 </head>
 <body>
+<div id="map-container" style="height: 300px;"></div>
 <div id="app"></div>
 <script type="text/babel" charset="UTF-8">
     class App extends React.Component {
+        mapMounted = false;
+        markerCurrent = null;
         state = {
             instances: [],
-            locations: []
+            locations: [],
+            searchTerm: '',
+            currentPage: 1,
+            locationsPerPage: 10
         };
 
         componentDidMount() {
@@ -33,35 +46,91 @@
             try {
                 const response = await fetch('/api/info');
                 const instances = await response.json();
-                
-                this.setState({
-                    instances: instances.sort((a, b) => a.id - b.id)
-                });
+                this.setState({instances});
+                if (instances.length > 0) {
+                    if (!this.mapMounted) {
+                        this.initializeMap(instances[0]);
+                    }
+                    this.markerCurrent.setLatLng([instances[0].latitude, instances[0].longitude]);
+                }
             } catch (error) {
                 console.error("Error fetching instances:", error);
             }
+        }
+
+        initializeMap(instance) {
+            this.mapMounted = true;
+            const {latitude, longitude, altitude} = instance;
+
+            const map = L.map('map-container').setView([latitude, longitude], 13);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            this.markerCurrent = L.marker([latitude, longitude]).addTo(map);
+            this.markerCurrent._icon.classList.add("huechange");
+
+            const markerClick = L.marker([latitude, longitude]).addTo(map);
+
+            markerClick.bindPopup(`
+                <div>
+                    <label for="alt-slider">Altitude: <span id="alt-value">${altitude.toFixed(0)}</span> ft</label><br />
+                    <input id="alt-slider" type="range" min="0" max="20000" step="100" value="${altitude}" /><br />
+                    <button id="teleport-btn" class="btn btn-primary btn-sm mt-2">Teleport</button>
+                </div>
+            `).openPopup();
+
+            const updateAltitudeText = (value) => {
+                document.getElementById('alt-value').textContent = value;
+            };
+
+            document.getElementById('alt-slider').addEventListener('input', (e) => {
+                updateAltitudeText(e.target.value);
+            });
+
+            map.on('click', (e) => {
+                const {lat, lng} = e.latlng;
+                markerClick.setLatLng([lat, lng]);
+
+                markerClick.bindPopup(`
+                    <div>
+                    <label for="alt-slider">Altitude: <span id="alt-value">${altitude.toFixed(5)}</span> ft</label><br />
+                    <input id="alt-slider" type="range" min="0" max="20000" step="100" value="${altitude}" /><br />
+                        <button id="teleport-btn" class="btn btn-primary btn-sm mt-2">Teleport</button>
+                    </div>
+                `).openPopup();
+
+                document.getElementById('alt-slider').addEventListener('input', (e) => {
+                    updateAltitudeText(e.target.value);
+                });
+
+                document.getElementById('teleport-btn').onclick = () => {
+                    const newAltitude = parseInt(document.getElementById('alt-slider').value, 10);
+                    this.teleport({latitude: lat, longitude: lng, altitude: newAltitude, heading: 0});
+                };
+            });
         }
 
         fetchLocations = async () => {
             try {
                 const response = await fetch('/api/locations');
                 const locations = await response.json();
-                
                 this.setState({
-                    locations: locations.sort((a, b) => a.name.localeCompare(b.name))
+                    locations: locations.sort((a, b) => a.name.localeCompare(b.name)),
+                    currentPage: 1  // Reset to first page when locations are fetched
                 });
             } catch (error) {
                 console.error("Error fetching locations:", error);
             }
         }
 
-        addLocation = async (name, lon, lat, alt) => {
-            const { newLocation } = this.state;
+        addLocation = async (name, lon, lat, alt, heading) => {
             try {
                 await fetch('/api/locations', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, latitude: lat, longitude: lon, altitude: alt })
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name, latitude: lat, longitude: lon, altitude: alt, heading: heading})
                 });
                 this.fetchLocations();
             } catch (error) {
@@ -73,11 +142,12 @@
             try {
                 await fetch('/api/setCords', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         latitude: location.latitude,
                         longitude: location.longitude,
-                        altitude: location.altitude + altitudeOffset
+                        altitude: location.altitude + altitudeOffset,
+                        heading: location.heading
                     })
                 });
             } catch (error) {
@@ -89,8 +159,8 @@
             try {
                 await fetch('/api/locations', {
                     method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name })
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name})
                 });
                 this.fetchLocations();
             } catch (error) {
@@ -98,97 +168,263 @@
             }
         }
 
+        handleSearchChange = (e) => {
+            this.setState({
+                searchTerm: e.target.value,
+                currentPage: 1  // Reset to first page when search changes
+            });
+        }
+
+        handlePageChange = (pageNumber) => {
+            this.setState({currentPage: pageNumber});
+        }
+
         render() {
-            const { instances, locations, newLocation } = this.state;
+            const {
+                instances,
+                locations,
+                searchTerm,
+                currentPage,
+                locationsPerPage
+            } = this.state;
+
+            // Filter locations based on search term
+            const filteredLocations = locations.filter(location =>
+                location.name.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            // Pagination logic
+            const indexOfLastLocation = currentPage * locationsPerPage;
+            const indexOfFirstLocation = indexOfLastLocation - locationsPerPage;
+            const currentLocations = filteredLocations.slice(
+                indexOfFirstLocation,
+                indexOfLastLocation
+            );
+
+            // Calculate total pages
+            const totalPages = Math.ceil(filteredLocations.length / locationsPerPage);
+
             return (
                 <div className="container">
                     <div className="row">
-                            <h3>Instances</h3>
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Instance ID</th>
-                                        <th>Coordinates</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {instances.map(instance => (
-                                    <tr key={instance.id}>
-                                        <td>{instance.id}</td>
-                                        <td>
-                                            Longitude: {instance.longitude}<br/>
-                                            Latitude: {instance.latitude}<br/>
-                                            Altitude: {instance.altitude}
-                                        </td>
-                                        <td>           
-                                            <input 
-                                                type="text" 
+                        <table className="table">
+                            <tbody>
+                            {instances.map(instance => (
+                                <tr key={instance.id}>
+                                    <td>
+                                        Current location: {instance.longitude.toFixed(5)}°
+                                        x {instance.latitude.toFixed(5)}° @ {instance.altitude.toFixed(2)} ft <i
+                                        class="bi bi-compass align-middle"></i> {instance.heading.toFixed(0)}°
+                                        <div className="d-flex align-items-center" style={{gap: '10px'}}>
+                                            <input
+                                                type="text"
                                                 name="name"
-                                                className="form-control mb-2"
-                                                placeholder="Enter location name"
-                                            />                     
+                                                className="form-control"
+                                                placeholder="Name"
+                                                style={{width: '200px'}}
+                                            />
                                             <button
                                                 className="btn btn-success"
                                                 onClick={(e) => {
                                                     const input = e.target.previousElementSibling;
                                                     const name = input.value;
-                                                    this.addLocation(name, instance.longitude, instance.latitude, instance.altitude);
+                                                    this.addLocation(name, instance.longitude, instance.latitude, instance.altitude + 1, instance.heading);
                                                 }}>
-                                                Add
+                                                Store current location
                                             </button>
-                                            <button 
-                                                    className="btn btn-sm btn-primary" 
-                                                    onClick={() => this.teleport({longitude:instance.longitude, latitude:instance.latitude, altitude:instance.altitude+500})}>
-                                                    +500
-                                                </button>
-                                            <button 
-                                                    className="btn btn-sm btn-primary" 
-                                                    onClick={() => this.teleport({longitude:instance.longitude, latitude:instance.latitude, altitude:instance.altitude-500})}>
-                                                    -500
-                                                </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                                </tbody>
-                            </table>
-                        
-                    <div className="row">
+                                        </div>
+                                    </td>
+                                    <td>
+
+                                        <div class="container">
+                                            <div class="d-flex gap-1 align-items-center">
+                                                <div class="d-flex gap-1 align-items-center">
+                                                    <div class="d-flex gap-1">
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude - 0.001369,
+                                                                    latitude: instance.latitude,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-left"></i>
+                                                        </button>
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude - 0.00001369,
+                                                                    latitude: instance.latitude,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-left-short"></i>
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="d-flex flex-column gap-1">
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude,
+                                                                    latitude: instance.latitude + 0.001369,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-up"></i>
+                                                        </button>
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude,
+                                                                    latitude: instance.latitude - 0.00001369,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-up-short"></i>
+                                                        </button>
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude,
+                                                                    latitude: instance.latitude - 0.00001369,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-down-short"></i>
+                                                        </button>
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude,
+                                                                    latitude: instance.latitude - 0.001369,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-down"></i>
+                                                        </button>
+                                                    </div>
+
+                                                    <div class="d-flex gap-1">
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude + 0.00001369,
+                                                                    latitude: instance.latitude,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-right-short"></i>
+                                                        </button>
+                                                        <button class="btn btn-light direction-btn"
+                                                                onClick={() => this.teleport({
+                                                                    longitude: instance.longitude + 0.001369,
+                                                                    latitude: instance.latitude,
+                                                                    altitude: instance.altitude,
+                                                                    heading: instance.heading
+                                                                })}>
+                                                            <i class="bi bi-arrow-right"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="d-flex flex-column gap-1">
+                                                    <button class="btn btn-sm btn-primary altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude + 1000,
+                                                                heading: instance.heading
+                                                            })}>+1000 ft
+                                                    </button>
+                                                    <button class="btn btn-sm btn-primary altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude + 100,
+                                                                heading: instance.heading
+                                                            })}>+100 ft
+                                                    </button>
+                                                    <button class="btn btn-sm btn-primary altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude + 1,
+                                                                heading: instance.heading
+                                                            })}>+1 ft
+                                                    </button>
+                                                    <button class="btn btn-sm btn-danger altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude - 1,
+                                                                heading: instance.heading
+                                                            })}>-1 ft
+                                                    </button>
+                                                    <button class="btn btn-sm btn-danger altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude - 100,
+                                                                heading: instance.heading
+                                                            })}>-100 ft
+                                                    </button>
+                                                    <button class="btn btn-sm btn-danger altitude-btn"
+                                                            onClick={() => this.teleport({
+                                                                longitude: instance.longitude,
+                                                                latitude: instance.latitude,
+                                                                altitude: instance.altitude - 1000,
+                                                                heading: instance.heading
+                                                            })}>-1000 ft
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                            </tbody>
+                        </table>
+
+                        <div className="row">
                             <h3>Locations</h3>
+                            <div className="mb-3">
+                                <input
+                                    type="text"
+                                    className="form-control"
+                                    placeholder="Search locations..."
+                                    value={searchTerm}
+                                    onChange={this.handleSearchChange}
+                                />
+                            </div>
                             <table className="table">
                                 <thead>
-                                    <tr>
-                                        <th>Name</th>
-                                        <th>Coordinates</th>
-                                        <th>Actions</th>
-                                    </tr>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Coordinates</th>
+                                    <th>Actions</th>
+                                </tr>
                                 </thead>
                                 <tbody>
-                                {locations.map(location => (
-                                    <tr key={location.name}>
+                                {currentLocations.map(location => (
+                                    <tr key={location.id}>
                                         <td>{location.name}</td>
                                         <td>
-                                            {location.longitude.toFixed(2)} x {location.latitude.toFixed(2)} @ {location.altitude.toFixed(0)}
+                                            {location.longitude.toFixed(2)}° x {location.latitude.toFixed(2)}°
+                                            @ {location.altitude.toFixed(0)} ft <i
+                                            class="bi bi-compass align-middle"></i> {location.heading.toFixed(0)}°
                                         </td>
                                         <td>
                                             <div className="btn-group">
-                                                <button 
-                                                    className="btn btn-sm btn-primary me-1" 
+                                                <button
+                                                    className="btn btn-sm btn-primary me-1"
                                                     onClick={() => this.teleport(location)}>
                                                     Teleport
                                                 </button>
-                                                <button 
-                                                    className="btn btn-sm btn-info me-1" 
+                                                <button
+                                                    className="btn btn-sm btn-info me-1"
                                                     onClick={() => this.teleport(location, 500)}>
                                                     Teleport + 500ft
                                                 </button>
-                                                <button 
-                                                    className="btn btn-sm btn-warning me-1" 
+                                                <button
+                                                    className="btn btn-sm btn-warning me-1"
                                                     onClick={() => this.teleport(location, 2000)}>
                                                     Teleport + 2000ft
                                                 </button>
-                                                <button 
-                                                    className="btn btn-sm btn-danger" 
+                                                <button
+                                                    className="btn btn-sm btn-danger"
                                                     onClick={() => this.deleteLocation(location.name)}>
                                                     Delete
                                                 </button>
@@ -198,6 +434,73 @@
                                 ))}
                                 </tbody>
                             </table>
+                            <nav>
+                                <ul className="pagination">
+                                    <li className={`page-item ${currentPage === 1 ? 'disabled' : ''}`}>
+                                        <button
+                                            className="page-link"
+                                            onClick={() => this.handlePageChange(currentPage - 1)}
+                                            disabled={currentPage === 1}
+                                        >
+                                            &laquo;
+                                        </button>
+                                    </li>
+
+                                    {currentPage !== 1 && (
+                                        <li className={`page-item ${currentPage === 1 ? 'active' : ''}`}>
+                                            <button
+                                                className="page-link"
+                                                onClick={() => this.handlePageChange(1)}
+                                            >
+                                                1
+                                            </button>
+                                        </li>
+                                    )}
+
+                                    {currentPage > 4 &&
+                                        <li className="page-item disabled"><span className="page-link">...</span></li>}
+
+                                    {Array.from({length: totalPages}, (_, i) => i + 1)
+                                        .filter(number => number >= currentPage - 2 && number <= currentPage + 2)
+                                        .map(number => (
+                                            <li
+                                                key={number}
+                                                className={`page-item ${currentPage === number ? 'active' : ''}`}
+                                            >
+                                                <button
+                                                    className="page-link"
+                                                    onClick={() => this.handlePageChange(number)}
+                                                >
+                                                    {number}
+                                                </button>
+                                            </li>
+                                        ))}
+
+                                    {currentPage < totalPages - 3 &&
+                                        <li className="page-item disabled"><span className="page-link">...</span></li>}
+
+                                    {currentPage !== totalPages && totalPages > 1 && (
+                                        <li className={`page-item ${currentPage === totalPages ? 'active' : ''}`}>
+                                            <button
+                                                className="page-link"
+                                                onClick={() => this.handlePageChange(totalPages)}
+                                            >
+                                                {totalPages}
+                                            </button>
+                                        </li>
+                                    )}
+
+                                    <li className={`page-item ${currentPage === totalPages ? 'disabled' : ''}`}>
+                                        <button
+                                            className="page-link"
+                                            onClick={() => this.handlePageChange(currentPage + 1)}
+                                            disabled={currentPage === totalPages}
+                                        >
+                                            &raquo;
+                                        </button>
+                                    </li>
+                                </ul>
+                            </nav>
                         </div>
                     </div>
                 </div>
