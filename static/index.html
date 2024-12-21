@@ -19,10 +19,11 @@
 </head>
 <body>
 <div id="map-container" style="height: 300px;"></div>
+
 <div id="app"></div>
 <script type="text/babel" charset="UTF-8">
     class App extends React.Component {
-        mapMounted = false;
+        map = null;
         markerCurrent = null;
         state = {
             instances: [],
@@ -48,10 +49,12 @@
                 const instances = await response.json();
                 this.setState({instances});
                 if (instances.length > 0) {
-                    if (!this.mapMounted) {
+                    if (this.map == null) {
                         this.initializeMap(instances[0]);
                     }
-                    this.markerCurrent.setLatLng([instances[0].latitude, instances[0].longitude]);
+                    if (this.markerCurrent != null) {
+                        this.markerCurrent.setLatLng([instances[0].latitude, instances[0].longitude]);
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching instances:", error);
@@ -59,19 +62,18 @@
         }
 
         initializeMap(instance) {
-            this.mapMounted = true;
             const {latitude, longitude, altitude} = instance;
 
-            const map = L.map('map-container').setView([latitude, longitude], 13);
+            this.map = L.map('map-container').setView([latitude, longitude], 13);
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
+            }).addTo(this.map);
 
-            this.markerCurrent = L.marker([latitude, longitude]).addTo(map);
+            this.markerCurrent = L.marker([latitude, longitude]).addTo(this.map);
             this.markerCurrent._icon.classList.add("huechange");
 
-            const markerClick = L.marker([latitude, longitude]).addTo(map);
+            const markerClick = L.marker([latitude, longitude]).addTo(this.map);
 
             markerClick.bindPopup(`
                 <div>
@@ -89,7 +91,31 @@
                 updateAltitudeText(e.target.value);
             });
 
-            map.on('click', (e) => {
+            L.Control.RecenterControl = L.Control.extend({
+                options: {
+                    position: 'topleft'
+                },
+
+                onAdd: (map) => {
+                    const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+                    const button = L.DomUtil.create('a', '', container);
+                    button.innerHTML = '<i class="bi bi-crosshair"></i>';
+                    button.title = 'Recenter map';
+                    button.href = '#';
+
+                    L.DomEvent.on(button, 'click', (e) => {
+                        L.DomEvent.preventDefault(e);
+                        L.DomEvent.stopPropagation(e);
+                        map.panTo(this.markerCurrent.getLatLng());
+                    });
+
+                    return container;
+                }
+            });
+
+            new L.Control.RecenterControl().addTo(this.map);
+
+            this.map.on('click', (e) => {
                 const {lat, lng} = e.latlng;
                 markerClick.setLatLng([lat, lng]);
 
@@ -501,6 +527,7 @@
                                     </li>
                                 </ul>
                             </nav>
+
                         </div>
                     </div>
                 </div>

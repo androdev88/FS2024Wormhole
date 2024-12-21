@@ -41,17 +41,28 @@ You will need working VFRmap addon (in free flight) and Cheat Engine.
 5. Repeat steps 3-5 until you are down to 200-300 values, select all and add to the address list
 6. Unpause the game, put plane in a steep descend and start freezing values in address list (put checkbox), find one that freezes the altitude (the plain will start "jumping" as it will be teleported to frozen value every 50ms)
 7. Remove all other items from address list, you should have one that controls plane altitude
-8. Copy and paste this address using "Adjust address by": `-30` this will add address for plane's latitude (in radians), remove altitude address from list
-9. Right click on that address and Generate pointermap - it will take a long time and use a lot of disk space (take a note of the latitude address)
-10. Restart the game follow steps 1-8
-11. Once you have found new address for altitude, right click and choose Pointer scan for this address
-12. Check "Compare results with other saved pointermap(s)" and choose the file from step 8 (you might need to fill previous latitude address from step 9 if it wasn't filled next to opened pointermap file)
-13. Wait - takes even longer than step 8
-14. Once you have a list of possible pointers, sort it and use the one with fewest offsets
-15. Put the found pointer and offsets in config file `[Pointers]` section with game version (from window header) and game exe file size in bytes as key, first value should be the part after `+` in Base Address, add offsets after commas (prepend values with 0x)
-16. Share your finding with the community :)
+8. Copy and paste this address using `Adjust address by`: `-30` this will add address for plane's latitude (in radians), remove altitude address from list
+9. Right click on that address and Generate pointermap - it will take a long time and use a lot of disk space ~400MB (take a note of the latitude address)
 
-If you find that after the game restart the pointer stops working try reopening pointer map from step 13 and find another pointer that shows correct value (latitude in radians).
+Follow steps 1-9 again after restarting game to get second pointer map and address.
+
+At this point you should have 2 files and 2 addresses e.g.
+latitude1.scandata 3DDC9C96C28
+latitude2.scandata 3D61F62F8A8
+
+To find the pointer you need to compare these files to find pointer candidates.
+In Cheat Engine go to `Memory View` -> Menu `Tools` -> `Pointer Scan`, in Pinter Scan window go to Menu `Pointer Scanner`->`Scan for pointer`
+1. Select checkbox `Use saved pointer map` select `latitude1.scandata`
+2. If it didn't autofill the address put the latitude address used to generate this pointer map
+3. Select `Compare results with other saved pointermap(s)`, open `latitude2.scandata` file
+4. If it didn't autofill the address put the latitude address used to generate this pointer map, Hit OK store results as `pointers.PTR` and wait
+5. Click on offset 1 to sort by shortest paths first
+6. Try any values from beginning of the list, put the found pointer and offsets in config file `[Pointers]` section with game version (from window header) and game exe file size in bytes as key, first value should be the part after `+` in Base Address, add offsets after commas (prepend values with 0x)
+7. Share your finding with the community :)
+
+![](README.pointers.png)
+
+If you find that after the game restart the pointer stops working try reopening pointer map from step 4 and find another pointer that shows correct value (latitude in radians).
 
 There are better tutorials on how to use Cheat Engine Pointer Scanning on the Internet.
 
